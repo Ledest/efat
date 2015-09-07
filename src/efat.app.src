@@ -1,4 +1,4 @@
-{application, efat, [{description, ""},
+{application, efat, [{description, "Erlang Function Argument Types"},
                      {vsn, "0.1.0"},
                      {id, "git"},
                      {modules, []},
