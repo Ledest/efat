@@ -48,8 +48,10 @@ pattern_transform(Pattern, Guards) ->
     case Pattern =/= none andalso type(Pattern) of
         infix_expr -> do_pattern_transform(Pattern, Guards);
         tuple ->
-            {P, G} = patterns_transform(tuple_elements(Pattern)),
-            {tuple(P), G ++ Guards};
+            case patterns_transform(tuple_elements(Pattern)) of
+                {[], _} -> {Pattern, Guards};
+                {P, G} -> {tuple(P), G ++ Guards}
+            end;
         list ->
             {PH, GH} = patterns_transform(erl_syntax:list_prefix(Pattern)),
             {PT, GT} = pattern_transform(erl_syntax:list_suffix(Pattern), []),
