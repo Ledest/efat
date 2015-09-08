@@ -54,8 +54,12 @@ pattern_transform(Pattern, Guards) ->
             end;
         list ->
             {PH, GH} = patterns_transform(erl_syntax:list_prefix(Pattern)),
-            {PT, GT} = pattern_transform(erl_syntax:list_suffix(Pattern), []),
-            {list(PH, PT), GH ++ GT ++ Guards};
+            {PT, G} = pattern_transform(erl_syntax:list_suffix(Pattern), Guards),
+            {list(PH, PT), GH ++ G};
+        match_expr ->
+            {B, GB} = pattern_transform(erl_syntax:match_expr_body(Pattern), Guards),
+            {P, G} = pattern_transform(erl_syntax:match_expr_pattern(Pattern), GB),
+            {match_expr(P, B), G};
         _ -> {Pattern, Guards}
     end.
 
@@ -284,16 +288,18 @@ variable(V, P) when is_atom(V) -> pos(P, erl_syntax:variable(V)).
 
 variable(V) when is_tuple(V) -> variable(erl_syntax:variable_name(V), V).
 
-application(O, A) -> pos(O, erl_syntax:application(O, A)).
+application(O, A) -> pos(A, erl_syntax:application(O, A)).
 
-%application(M, N, A) -> pos(M, erl_syntax:application(M, N, A)).
+%application(M, N, A) -> pos(A, erl_syntax:application(M, N, A)).
 
 operator(O, P) -> pos(P, erl_syntax:operator(O)).
 
-infix_expr(L, O, R) -> pos(L, erl_syntax:infix_expr(L, O, R)).
+infix_expr(L, O, R) -> pos(R, erl_syntax:infix_expr(L, O, R)).
 
 conjunction(T) -> pos(T, erl_syntax:conjunction(T)).
 
 disjunction(T) -> pos(T, erl_syntax:disjunction(T)).
 
 clause(P, G, B) -> pos(B, erl_syntax:clause(P, G, B)).
+
+match_expr(P, B) -> pos(B, erl_syntax:match_expr(P, B)).
