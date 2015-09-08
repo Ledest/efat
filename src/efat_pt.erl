@@ -137,7 +137,14 @@ do_pattern_transform_op(Pattern, Guards, Arg, Type, infix_expr) ->
     case lists:member(operator_name(O), ['<', '>', '=<', '>=', '/=', '=/=', '=:=', '==']) of
         true ->
             {V, [G]} = do_pattern_transform_op(Pattern, [], Arg, infix_expr_left(Type)),
-            {V, [infix_expr(G, operator('andalso', G), infix_expr(V, O, infix_expr_right(Type)))|Guards]};
+            {V, make_guard(infix_expr(G, operator('andalso', G), infix_expr(V, O, infix_expr_right(Type))), Guards)};
+        _ -> {Pattern, Guards}
+    end;
+do_pattern_transform_op(Pattern, Guards, Arg, Type, prefix_expr) ->
+    case operator_name(erl_syntax:prefix_expr_operator(Type)) of
+        '-' ->
+            {V, [G]} = do_pattern_transform_op(Pattern, [], Arg, erl_syntax:prefix_expr_argument(Type)),
+            {V, make_guard(erl_syntax:prefix_expr(operator('not', G), G), Guards)};
         _ -> {Pattern, Guards}
     end;
 do_pattern_transform_op(Pattern, Guards, Arg, Type, binary) ->
@@ -179,7 +186,7 @@ make_guard(G, Guards) -> [G|Guards].
 
 make_var_guard(G, Arg, Guards) when is_atom(G) ->
     V = variable(Arg),
-    {V, [application(atom(G, Arg), [V])|Guards]}.
+    {V, make_guard(application(atom(G, Arg), [V]), Guards)}.
 
 make_var_guard(G, Arg, Size, Guards) ->
     V = variable(Arg),
