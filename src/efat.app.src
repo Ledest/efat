@@ -1,5 +1,5 @@
 {application, efat, [{description, "Erlang Function Argument Types"},
-                     {vsn, "0.1.0"},
+                     {vsn, "0.1.1"},
                      {id, "git"},
                      {modules, []},
                      {registered, []},

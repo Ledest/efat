@@ -4,16 +4,11 @@
 
 -define(OP, '/').
 
--import(erl_syntax, [concrete/1,
-                     type/1,
-                     get_pos/1, set_pos/2, copy_pos/2,
-                     atom/1, variable/1,
+-import(erl_syntax, [concrete/1, type/1, get_pos/1,
                      integer_value/1, atom_value/1,
                      tuple_elements/1,
-                     operator/1, application/2,
-                     conjunction/1, disjunction/1,
-                     module_qualifier_argument/1, module_qualifier_body/1,
-                     infix_expr/3]).
+                     infix_expr_left/1, infix_expr_right/1,
+                     module_qualifier_argument/1, module_qualifier_body/1]).
 
 parse_transform(Forms, _Options) ->
     lists:map(fun(Tree) ->
@@ -32,6 +27,9 @@ clause_transform(Node) ->
         Patterns ->
             case patterns_transform(Patterns) of
                 {Patterns, _} -> Node;
+%                {P, []} ->
+%                    io:fwrite(standard_error, "Patterns = ~p~nP = ~p~n", [Patterns, P]),
+%                    erl_syntax:clause(P, erl_syntax:clause_guard(Node), erl_syntax:clause_body(Node));
                 {P, G} ->
                     erl_syntax:clause(P,
                                       case erl_syntax:clause_guard(Node) of
@@ -48,33 +46,42 @@ guards_append(L, G) -> conjunction(L ++ erl_syntax:conjunction_body(G)).
 patterns_transform(Patterns) -> lists:mapfoldr(fun pattern_transform/2, [], Patterns).
 
 pattern_transform(Pattern, Guards) ->
-    case type(Pattern) of
+    case Pattern =/= none andalso type(Pattern) of
         infix_expr -> do_pattern_transform(Pattern, Guards);
         tuple ->
             {P, G} = patterns_transform(tuple_elements(Pattern)),
-            {erl_syntax:tuple(P), G ++ Guards};
+            {tuple(P), G ++ Guards};
         list ->
             {PH, GH} = patterns_transform(erl_syntax:list_prefix(Pattern)),
             {PT, GT} = pattern_transform(erl_syntax:list_suffix(Pattern), []),
-            {erl_syntax:list(PH, PT), GH ++ GT ++ Guards};
+            {list(PH, PT), GH ++ GT ++ Guards};
         _ -> {Pattern, Guards}
     end.
 
 do_pattern_transform(Pattern, Guards) ->
-    case erl_syntax:operator_name(erl_syntax:infix_expr_operator(Pattern)) of
+    O = erl_syntax:infix_expr_operator(Pattern),
+    case erl_syntax:operator_name(O) of
         ?OP -> do_pattern_transform_op(Pattern, Guards);
-        _ -> {Pattern, Guards}
+        Op ->
+            case lists:member(Op, ['<', '>', '=<', '>=', '/=', '=/=']) of
+                true ->
+                    case do_pattern_transform(infix_expr_left(Pattern), []) of
+                        {Pattern, []} -> {Pattern, Guards};
+                        {V, G} -> {V, G ++ [infix_expr(V, O, infix_expr_right(Pattern))|Guards]}
+                    end;
+                _ -> {Pattern, Guards}
+            end
     end.
 
 do_pattern_transform_op(Pattern, Guards) ->
-    Arg = erl_syntax:infix_expr_left(Pattern),
+    Arg = infix_expr_left(Pattern),
     case type(Arg) of
         variable -> do_pattern_transform_op(Pattern, Guards, Arg);
         _ -> {Pattern, Guards}
     end.
 
 do_pattern_transform_op(Pattern, Guards, Arg) ->
-    Type = erl_syntax:infix_expr_right(Pattern),
+    Type = infix_expr_right(Pattern),
     case get_pos(Arg) =:= get_pos(Type) of
         true -> do_pattern_transform_op(Pattern, Guards, Arg, Type);
         _ -> {Pattern, Guards}
@@ -85,12 +92,10 @@ do_pattern_transform_op(Pattern, Guards, Arg, Type) -> do_pattern_transform_op(P
 do_pattern_transform_op(Pattern, Guards, Arg, Type, atom) ->
     T = atom_value(Type),
     if
-        T =:= any orelse T =:= term -> {make_var(Arg), Guards};
+        T =:= any orelse T =:= term -> {variable(Arg), Guards};
         T =:= record ->
-            V = make_var(Arg),
-            {V, make_guard(copy_pos(Arg, application(copy_pos(Arg, atom(is_atom)),
-                                                     [application(copy_pos(Arg, atom(element)),
-                                                                  [erl_syntax:integer(1), V])])),
+            V = variable(Arg),
+            {V, make_guard(application(atom(is_atom, Arg), [application(atom(element, Arg), [integer(1, Arg), V])]),
                            Guards)};
         true ->
             case type_to_guard(T) of
@@ -110,17 +115,15 @@ do_pattern_transform_op(_Pattern, Guards, Arg, Type, list) ->
     case erl_syntax:list_elements(Type) of
         [Size] -> make_var_guard(length, Arg, Size, Guards);
         L ->
-            V = make_var(Arg),
-            {V, [make_orelse_chain(lists:map(fun(E) -> {V, [copy_pos(Type, infix_expr(V, operator('=:='), E))]} end, L))|Guards]}
+            V = variable(Arg),
+            {V, [make_orelse_chain(lists:map(fun(E) -> {V, [infix_expr(V, operator('=:=', V), E)]} end, L))|Guards]}
     end;
 do_pattern_transform_op(Pattern, Guards, Arg, Type, tuple) ->
     case tuple_elements(Type) of
         [] -> make_var_guard(is_tuple, Arg, Guards);
-        [Size] ->
-            io:fwrite(standard_error, "Size = ~p~n", [Size]),
-            make_var_guard(tuple_size, Arg, Size, Guards);
+        [Size] -> make_var_guard(tuple_size, Arg, Size, Guards);
         Types ->
-            {make_var(Arg),
+            {variable(Arg),
              [make_orelse_chain(lists:map(fun(T) -> do_pattern_transform_op(Pattern, [], Arg, T) end, Types))|Guards]}
     end;
 do_pattern_transform_op(Pattern, Guards, Arg, Type, binary) ->
@@ -142,8 +145,8 @@ do_pattern_transform_op(Pattern, Guards, Arg, Type, application) ->
             case type_to_size_guard(module_qualifier_argument(O)) of
                 undefined -> {Pattern, Guards};
                 G -> make_var_guard(G, Arg,
-                                    erl_syntax:application(atom(atom_value(module_qualifier_body(O))),
-                                                           erl_syntax:application_arguments(Type)),
+                                    application(atom(atom_value(module_qualifier_body(O)), O),
+                                                erl_syntax:application_arguments(Type)),
                                     Guards)
             end;
         _ -> {Pattern, Guards}
@@ -156,22 +159,20 @@ make_orelse_chain(Guards) -> make_op_chain(Guards, 'orelse').
 
 make_op_chain(Guards, Op) ->
     [{_, [H]}|T] = lists:reverse(Guards),
-    lists:foldl(fun({_, [G]}, A) -> copy_pos(G, infix_expr(G, operator(Op), A)) end, H, T).
-
-make_var(Arg) -> copy_pos(Arg, variable(erl_syntax:variable_name(Arg))).
+    lists:foldl(fun({_, [G]}, A) -> infix_expr(G, operator(Op, G), A) end, H, T).
 
 make_guard(G, Guards) -> [G|Guards].
 
 make_var_guard(G, Arg, Guards) when is_atom(G) ->
-    V = make_var(Arg),
-    {V, [copy_pos(Arg, application(copy_pos(Arg, atom(G)), [V]))|Guards]}.
+    V = variable(Arg),
+    {V, [application(atom(G, Arg), [V])|Guards]}.
 
 make_var_guard(G, Arg, Guards, F) when is_function(F, 0) ->
-    V = make_var(Arg),
-    {V, make_guard(copy_pos(Arg, application(copy_pos(Arg, atom(G)), [V, F()])), Guards)};
+    V = variable(Arg),
+    {V, make_guard(application(atom(G, Arg), [V, F()]), Guards)};
 make_var_guard(G, Arg, Size, Guards) ->
-    V = make_var(Arg),
-    {V, [copy_pos(Arg, infix_expr(copy_pos(Arg, application(copy_pos(Arg, atom(G)), [V])), copy_pos(Arg, operator('=:=')), Size))|Guards]}.
+    V = variable(Arg),
+    {V, [infix_expr(application(atom(G, Arg), [V]), operator('=:=', Arg), Size)|Guards]}.
 
 type_to_guard(Type) when is_atom(Type) ->
     proplists:get_value(Type,
@@ -187,6 +188,7 @@ type_to_guard(Type) when is_atom(Type) ->
                          {integer, is_integer},
                          {int, is_integer},
                          {list, is_list},
+                         {string, is_list},
                          {map, is_map},
                          {number, is_number},
                          {num, is_number},
@@ -200,6 +202,7 @@ type_to_size_guard(Type) when is_atom(Type) ->
     proplists:get_value(Type,
                         [{list, length},
                          {nil, length},
+                         {string, length},
                          {tuple, tuple_size},
                          {binary, byte_size},
                          {bin, byte_size},
@@ -211,3 +214,30 @@ type_to_size_guard(A) when is_tuple(A) ->
                            atom -> atom_value(A);
                            T -> T
                        end).
+
+copy_pos([S|_], T) -> erl_syntax:copy_pos(S, T);
+copy_pos(S, T) -> erl_syntax:copy_pos(S, T).
+
+tuple(L) -> copy_pos(hd(L), erl_syntax:tuple(L)).
+
+list(H, T) -> copy_pos(hd(H), erl_syntax:list(H, T)).
+
+atom(A, P) -> copy_pos(P, erl_syntax:atom(A)).
+
+integer(I, P) -> copy_pos(P, erl_syntax:integer(I)).
+
+variable(V, P) when is_atom(V) -> copy_pos(P, erl_syntax:variable(V)).
+
+variable(V) when is_tuple(V) -> variable(erl_syntax:variable_name(V), V).
+
+application(O, A) -> copy_pos(O, erl_syntax:application(O, A)).
+
+%application(M, N, A) -> copy_pos(M, erl_syntax:application(M, N, A)).
+
+operator(O, P) -> copy_pos(P, erl_syntax:operator(O)).
+
+infix_expr(L, O, R) -> copy_pos(L, erl_syntax:infix_expr(L, O, R)).
+
+conjunction(T) -> copy_pos(T, erl_syntax:conjunction(T)).
+
+disjunction(T) -> copy_pos(T, erl_syntax:disjunction(T)).
