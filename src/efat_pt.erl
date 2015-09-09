@@ -14,9 +14,7 @@
                      module_qualifier_argument/1, module_qualifier_body/1]).
 
 parse_transform(Forms, _Options) ->
-    lists:map(fun(Tree) ->
-                  erl_syntax:revert(erl_syntax_lib:map(fun(E) -> do_transform(E) end, Tree))
-              end, Forms).
+    lists:map(fun(Tree) -> erl_syntax:revert(erl_syntax_lib:map(fun do_transform/1, Tree)) end, Forms).
 
 do_transform(Node) ->
     case type(Node) of
@@ -47,11 +45,10 @@ patterns_transform(Patterns) -> lists:mapfoldr(fun pattern_transform/2, [], Patt
 pattern_transform(Pattern, Guards) ->
     case Pattern =/= none andalso type(Pattern) of
         infix_expr -> do_pattern_transform(Pattern, Guards);
-        tuple ->
-            case patterns_transform(tuple_elements(Pattern)) of
-                {[], _} -> {Pattern, Guards};
-                {P, G} -> {tuple(P), G ++ Guards}
-            end;
+        tuple -> case patterns_transform(tuple_elements(Pattern)) of
+                     {[], _} -> {Pattern, Guards};
+                     {P, G} -> {tuple(P), G ++ Guards}
+                 end;
         list ->
             {PH, GH} = patterns_transform(erl_syntax:list_prefix(Pattern)),
             {PT, G} = pattern_transform(erl_syntax:list_suffix(Pattern), Guards),
@@ -71,12 +68,16 @@ do_pattern_transform(Pattern, Guards) ->
             case lists:member(Op, ['<', '>', '=<', '>=', '/=', '=/=', '=:=', '==']) of
                 true ->
                     L = infix_expr_left(Pattern),
-                    Op2 = infix_expr_operator(L),
-                    case type(L) =:= infix_expr andalso operator_name(Op2) of
-                        ?OP -> do_pattern_transform_op(infix_expr(infix_expr_left(L), Op2,
-                                                                  infix_expr(infix_expr_right(L), O,
-                                                                             infix_expr_right(Pattern))),
-                                                       Guards);
+                    case type(L) of
+                        infix_expr ->
+                            Op2 = infix_expr_operator(L),
+                            case operator_name(Op2) of
+                                ?OP -> do_pattern_transform_op(infix_expr(infix_expr_left(L), Op2,
+                                                                          infix_expr(infix_expr_right(L), O,
+                                                                                     infix_expr_right(Pattern))),
+                                                               Guards);
+                                _ -> {Pattern, Guards}
+                            end;
                         _ -> {Pattern, Guards}
                     end;
                 _ -> {Pattern, Guards}
@@ -106,14 +107,13 @@ do_pattern_transform_op(Pattern, Guards, Arg, Type, atom) ->
         T =:= any; T =:= term -> {V, Guards};
         T =:= null; T =:= none; T =:= undefined ->
             {V, make_guard(infix_expr(V, operator('=:=', Arg), atom(T, Arg)), Guards)};
-        T =:= record ->
+        T =:= record; T =:= rec; T =:= r ->
             {V, make_guard(application(atom(is_atom, Arg), [application(atom(element, Arg), [integer(1, Arg), V])]),
                            Guards)};
-        true ->
-            case type_to_guard(T) of
-                undefined -> {Pattern, Guards};
-                G -> make_var_guard(G, Arg, Guards)
-            end
+        true -> case type_to_guard(T) of
+                    undefined -> {Pattern, Guards};
+                    G -> make_var_guard(G, Arg, Guards)
+                end
     end;
 do_pattern_transform_op(_Pattern, Guards, Arg, Type, record_expr) ->
     make_var_guard(is_record, Arg, erl_syntax:record_expr_type(Type), Guards);
