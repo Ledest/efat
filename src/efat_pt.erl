@@ -30,6 +30,7 @@ clause_transform(Node) ->
                 {Patterns, _} -> Node;
                 {P, G} -> clause(P,
                                  case erl_syntax:clause_guard(Node) of
+                                     none when G =:= [] -> none;
                                      none -> conjunction(G);
                                      Guards -> disjunction(lists:map(fun(E) -> guards_append(G, E) end,
                                                            erl_syntax:disjunction_body(Guards)))
@@ -68,13 +69,14 @@ do_pattern_transform(Pattern, Guards) ->
             case lists:member(Op, ['<', '>', '=<', '>=', '/=', '=/=', '=:=', '==']) of
                 true ->
                     L = infix_expr_left(Pattern),
+                    R = infix_expr_right(Pattern),
                     case type(L) of
+                        variable -> {L, [infix_expr(L, O, R)|Guards]};
                         infix_expr ->
                             Op2 = infix_expr_operator(L),
                             case operator_name(Op2) of
                                 ?OP -> do_pattern_transform_op(infix_expr(infix_expr_left(L), Op2,
-                                                                          infix_expr(infix_expr_right(L), O,
-                                                                                     infix_expr_right(Pattern))),
+                                                                          infix_expr(infix_expr_right(L), O, R)),
                                                                Guards);
                                 _ -> {Pattern, Guards}
                             end;
@@ -104,7 +106,6 @@ do_pattern_transform_op(Pattern, Guards, Arg, Type, atom) ->
     T = atom_value(Type),
     V = variable(Arg),
     if
-        T =:= any; T =:= term -> {V, Guards};
         T =:= null; T =:= none; T =:= undefined ->
             {V, make_guard(infix_expr(V, operator('=:=', Arg), atom(T, Arg)), Guards)};
         T =:= record; T =:= rec; T =:= r ->
@@ -142,8 +143,11 @@ do_pattern_transform_op(Pattern, Guards, Arg, Type, infix_expr) ->
     O = infix_expr_operator(Type),
     case lists:member(operator_name(O), ['<', '>', '=<', '>=', '/=', '=/=', '=:=', '==']) of
         true ->
-            {V, [G]} = do_pattern_transform_op(Pattern, [], Arg, infix_expr_left(Type)),
-            {V, make_guard(infix_expr(G, operator('andalso', G), infix_expr(V, O, infix_expr_right(Type))), Guards)};
+            {V, L} = do_pattern_transform_op(Pattern, [], Arg, infix_expr_left(Type)),
+            {V, make_guard(case L of
+                               [] -> infix_expr(V, O, infix_expr_right(Type));
+                               [G] -> infix_expr(G, operator('andalso', G), infix_expr(V, O, infix_expr_right(Type)))
+                           end, Guards)};
         _ -> {Pattern, Guards}
     end;
 do_pattern_transform_op(Pattern, Guards, Arg, Type, prefix_expr) ->
@@ -200,6 +204,7 @@ make_op_chain(Guards, Op) ->
 
 make_guard(G, Guards) -> [G|Guards].
 
+make_var_guard(true, Arg, Guards) -> {variable(Arg), Guards};
 make_var_guard(G, Arg, Guards) when is_atom(G) ->
     V = variable(Arg),
     {V, make_guard(application(atom(G, Arg), [V]), Guards)}.
@@ -244,7 +249,9 @@ type_to_guard(Type) when is_atom(Type) ->
                          {rec, is_record},
                          {r, is_record},
                          {tuple, is_tuple},
-                         {t, is_tuple}]).
+                         {t, is_tuple},
+                         {any, true},
+                         {term, true}]).
 
 type_to_size_guard(Type) when is_atom(Type) ->
     proplists:get_value(Type,
