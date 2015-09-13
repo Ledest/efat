@@ -62,12 +62,16 @@ pattern_transform(Pattern, Guards) ->
     end.
 
 do_pattern_transform(Pattern, Guards) ->
-    O = infix_expr_operator(Pattern),
-    case operator_name(O) of
+    OO = infix_expr_operator(Pattern),
+    case operator_name(OO) of
         ?OP -> do_pattern_transform_op(Pattern, Guards);
         Op ->
-            case lists:member(Op, ['<', '>', '=<', '>=', '/=', '=/=', '=:=', '==']) of
+            case lists:member(Op, ['<', '>', '=<', '>=', '/=', '=/=', '=:=', '==', '!']) of
                 true ->
+                    O = if
+                            Op =:= '!' -> operator('=/=', OO);
+                            true -> OO
+                        end,
                     L = infix_expr_left(Pattern),
                     R = infix_expr_right(Pattern),
                     case type(L) of
